@@ -1,0 +1,1238 @@
+[student@workstation ~]$ cat get-users.sh 
+#!/bin/sh
+filter='?(.name=="htpasswd_provider")'
+secret_name=$(oc get oauth cluster \
+	-o jsonpath="{.spec.identityProviders[$filter].htpasswd.fileData.name}")
+secret_file=$(oc extract secret/$secret_name -n openshift-config --confirm)
+cut -d : -f 1 <$secret_file
+rm $secret_file
+
+
+
+[student@workstation automation-scripts]$ pwd
+/home/student/DO380/solutions/automation-scripts
+
+[student@workstation automation-scripts]$ ls -lt
+total 12
+-rw-rw-r--. 1 student student 628 Mar  2 15:11 cronjob.yml
+-rw-rw-r--. 1 student student 510 Mar  2 15:11 job.yml
+-rw-rw-r--. 1 student student 515 Mar  2 15:11 rbac.yml
+
+[student@workstation automation-scripts]$ cat rbac.yml 
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: auditor
+  namespace: automation-scripts
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: auditor
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: auditor
+subjects:
+- kind: ServiceAccount
+  name: auditor
+  namespace: automation-scripts
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: auditor
+
+[student@workstation automation-scripts]$ cat job.yml 
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: audit-sh
+  namespace: automation-scripts
+spec:
+  template:
+    spec:
+      serviceAccountName: auditor
+      restartPolicy: Never
+      containers:
+      - name: audit-sh
+        image: registry.redhat.io/openshift4/ose-cli:v4.5
+        command: ["/bin/sh", "-c"]
+        args:
+          - "oc get pods --all-namespaces
+              -o jsonpath='{.items[*].spec.containers[*].image}'
+              | sed 's/ /\\\n/g'
+              | sort
+              | uniq"
+[student@workstation automation-scripts]$ cat cronjob.yml 
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: audit-cron
+  namespace: automation-scripts
+spec:
+  schedule: "*/2 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: auditor
+          restartPolicy: Never
+          containers:
+          - name: audit-sh
+            image: registry.redhat.io/openshift4/ose-cli:v4.5
+            command: ["/bin/sh", "-c"]
+            args:
+              - "oc get pods --all-namespaces
+                  -o jsonpath='{.items[*].spec.containers[*].image}'
+                  | sed 's/ /\\\n/g'
+                  | uniq
+                  | sort"
+
+
+
+
+[student@workstation ~]$ cd DO380/labs/automation-ansible/
+
+[student@workstation automation-ansible]$ cat ../../solutions/automation-ansible/k8s.yml 
+- name: Demonstrate k8s modules
+  hosts: localhost
+  become: false
+  vars:
+    namespace: automation-ansible
+  module_defaults:
+    group/k8s:
+      namespace: "{{ namespace }}"
+  tasks:
+    - name: Create the project
+      k8s:
+        api_version: project.openshift.io/v1
+        kind: Project
+        name: "{{ namespace }}"
+        state: present
+        namespace: ""
+
+    - name: Create objects from the manifest
+      k8s:
+        state: present
+        src: "{{ playbook_dir + '/hello.yml' }}"
+
+    - name: Get a info about all of the pods in the namespace
+      k8s_info:
+        kind: Pod
+
+    - name: Scale deployment up
+      k8s_scale:
+        kind: Deployment
+        name: hello
+        replicas: 3
+
+    - name: Get hostname of the route
+      k8s_info:
+        kind: Route
+        name: hello
+      register: route
+
+    - name: Test access to the app
+      uri:
+        url: "http://{{ route.resources[0].spec.host }}"
+        return_content: yes
+      register: response
+      until: response.status == 200
+      retries: 10
+      delay: 5
+
+    - name: Display response of the application
+      debug:
+        var: response.content
+
+
+[student@workstation automation-ansible]$ cat hello.yml 
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello
+spec:
+  selector:
+    matchLabels:
+      app: hello
+  template:
+    metadata:
+      labels:
+        app: hello
+    spec:
+      containers:
+        - image: quay.io/redhattraining/hello-world-nginx:v1.0
+          name: hello
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello
+spec:
+  ports:
+    - port: 80
+      protocol: TCP
+      targetPort: 8080
+  selector:
+    app: hello
+  type: ClusterIP
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  labels:
+    app: hello
+  name: hello
+spec:
+  port:
+    targetPort: 8080
+  to:
+    kind: Service
+    name: hello
+---
+
+
+[student@workstation ~]$ vi DO380/labs/operators-review/metering_operator.yaml
+[student@workstation ~]$ oc apply -f DO380/labs/operators-review/metering_operator.yaml 
+namespace/openshift-metering created
+operatorgroup.operators.coreos.com/openshift-metering created
+subscription.operators.coreos.com/lab-openshift-metering created
+[student@workstation ~]$ cat DO380/labs/operators-review/metering_operator.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    openshift.io/cluster-monitoring: "true"
+  name: openshift-metering
+
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: openshift-metering
+  namespace: openshift-metering
+spec:
+  targetNamespaces:
+  - openshift-metering
+
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: lab-openshift-metering
+  namespace: openshift-metering
+spec:
+  channel: "4.4"
+  name: metering-ocp
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+
+
+[student@workstation ~]$ cd DO380/labs/gitops-resources/
+[student@workstation gitops-resources]$ ls
+config  orig
+[student@workstation gitops-resources]$ cat config/oauth.yaml 
+apiVersion: config.openshift.io/v1
+kind: OAuth
+metadata:
+  annotations:
+    release.openshift.io/create-only: "true"
+  name: cluster
+spec:
+  identityProviders:
+  - htpasswd:
+      fileData:
+        name: htpasswd-secret
+    mappingMethod: claim
+    name: htpasswd_provider
+    type: HTPasswd
+[student@workstation gitops-resources]$ cat config/htpasswd-secret-data 
+admin:$apr1$7YEkhvEe$mb3kTDJNcArX8JBs0zHSI.
+developer:$apr1$bqT3hyf5$6APg0X7rBYzHs1eU4n1pX/
+kustom:$apr1$cfFHtpKh$Sk89BNG0N3HVOQZnFdkJY.
+[student@workstation gitops-resources]$ vi kustomization.yaml
+[student@workstation gitops-resources]$ mv kustomization.yaml ./config/
+[student@workstation gitops-resources]$ cat config/kustomization.yaml 
+resources:
+- oauth.yaml
+secretGenerator:
+- name: htpasswd-secret
+  namespace: openshift-config
+  files:
+  - htpasswd=htpasswd-secret-data
+generatorOptions:
+  disableNameSuffixHash: true
+
+
+[student@workstation gitops-resources]$ oc kustomize config
+apiVersion: v1
+data:
+  htpasswd: YWRtaW46JGFwcjEkN1lFa2h2RWUkbWIza1RESk5jQXJYOEpCczB6SFNJLgpkZXZlbG9wZXI6JGFwcjEkYnFUM2h5ZjUkNkFQZzBYN3JCWXpIczFlVTRuMXBYLwprdXN0b206JGFwcjEkY2ZGSHRwS2gkU2s4OUJORzBOM0hWT1FabkZka0pZLgo=
+kind: Secret
+metadata:
+  name: htpasswd-secret
+  namespace: openshift-config
+type: Opaque
+---
+apiVersion: config.openshift.io/v1
+kind: OAuth
+metadata:
+  annotations:
+    release.openshift.io/create-only: "true"
+  name: cluster
+spec:
+  identityProviders:
+  - htpasswd:
+      fileData:
+        name: htpasswd-secret
+    mappingMethod: claim
+    name: htpasswd_provider
+    type: HTPasswd
+[student@workstation gitops-resources]$ set -o vi
+[student@workstation gitops-resources]$ oc login -u admin -p redhat https://api.ocp4.example.com:6443
+Login successful.
+
+You have access to 60 projects, the list has been suppressed. You can list all projects with 'oc projects'
+
+Using project "gitops-deploy".
+[student@workstation gitops-resources]$ oc apply -k config
+Warning: oc apply should be used on resource created by either oc create --save-config or oc apply
+secret/htpasswd-secret configured
+Warning: oc apply should be used on resource created by either oc create --save-config or oc apply
+oauth.config.openshift.io/cluster configured
+[student@workstation gitops-resources]$ oc get pod -n openshift-authentication
+NAME                               READY   STATUS        RESTARTS   AGE
+oauth-openshift-795b96b774-5bqxs   1/1     Running       0          17s
+oauth-openshift-795b96b774-5wtw6   1/1     Running       0          27s
+oauth-openshift-86f78c488f-24rqw   1/1     Terminating   0          43h
+oauth-openshift-86f78c488f-mhptl   1/1     Terminating   0          43h
+[student@workstation gitops-resources]$ oc get pod -n openshift-authentication
+NAME                               READY   STATUS        RESTARTS   AGE
+oauth-openshift-795b96b774-5bqxs   1/1     Running       0          31s
+oauth-openshift-795b96b774-5wtw6   1/1     Running       0          41s
+oauth-openshift-86f78c488f-24rqw   0/1     Terminating   0          43h
+oauth-openshift-86f78c488f-mhptl   0/1     Terminating   0          43h
+[student@workstation gitops-resources]$ oc get pod -n openshift-authentication
+NAME                               READY   STATUS    RESTARTS   AGE
+oauth-openshift-795b96b774-5bqxs   1/1     Running   0          58s
+oauth-openshift-795b96b774-5wtw6   1/1     Running   0          68s
+
+[student@workstation gitops-resources]$ oc login  -u kustom -p redhat123
+Login successful.
+
+You don't have any projects. You can try to create a new project, by running
+
+    oc new-project <projectname>
+
+[student@workstation gitops-resources]$ oc login -u admin -p redhat
+Login successful.
+
+You have access to 60 projects, the list has been suppressed. You can list all projects with 'oc projects'
+
+Using project "default".
+[student@workstation gitops-resources]$ oc extract secret/htpasswd-secret -n openshift-config --confirm --to /tmp
+/tmp/htpasswd
+[student@workstation gitops-resources]$ cat /tmp/htpasswd 
+admin:$apr1$7YEkhvEe$mb3kTDJNcArX8JBs0zHSI.
+developer:$apr1$bqT3hyf5$6APg0X7rBYzHs1eU4n1pX/
+kustom:$apr1$cfFHtpKh$Sk89BNG0N3HVOQZnFdkJY.
+[student@workstation gitops-resources]$ htpasswd -D /tmp/htpasswd kustom 
+Deleting password for user kustom
+[student@workstation gitops-resources]$ oc set data secret/htpasswd-secret -n openshift-config --from-file htpasswd=/tmp/htpasswd 
+secret/htpasswd-secret data updated
+[student@workstation gitops-resources]$ oc get pod -n openshift-authentication
+NAME                               READY   STATUS    RESTARTS   AGE
+oauth-openshift-5c8747996f-5www8   0/1     Running   0          9s
+oauth-openshift-795b96b774-5bqxs   1/1     Running   0          4m39s
+oauth-openshift-795b96b774-5wtw6   1/1     Running   0          4m49s
+[student@workstation gitops-resources]$ oc get pod -n openshift-authentication
+NAME                               READY   STATUS        RESTARTS   AGE
+oauth-openshift-5c8747996f-5www8   1/1     Running       0          36s
+oauth-openshift-5c8747996f-td4zd   1/1     Running       0          24s
+oauth-openshift-795b96b774-5bqxs   1/1     Terminating   0          5m6s
+oauth-openshift-795b96b774-5wtw6   1/1     Terminating   0          5m16s
+
+[student@workstation gitops-resources]$ oc get pod -n openshift-authentication
+NAME                               READY   STATUS    RESTARTS   AGE
+oauth-openshift-5c8747996f-5www8   1/1     Running   0          82s
+oauth-openshift-5c8747996f-td4zd   1/1     Running   0          70s
+
+
+[student@workstation auth-ldap]$ pwd
+/home/student/DO380/labs/auth-ldap
+[student@workstation auth-ldap]$ cat ldap-cr.yml 
+apiVersion: config.openshift.io/v1
+kind: OAuth
+metadata:
+  name: cluster
+spec:
+  identityProviders:
+  - htpasswd:
+      fileData:
+        name: htpasswd-secret
+    mappingMethod: claim
+    name: htpasswd_provider
+    type: HTPasswd
+  - name: ldapidp
+    mappingMethod: claim
+    type: LDAP
+    ldap:
+      attributes:
+        id:
+        - dn
+        email:
+        - mail
+        name:
+        - cn
+        preferredUsername:
+        - uid
+      bindDN: "uid=admin,cn=users,cn=accounts,dc=ocp4,dc=example,dc=com"
+      bindPassword:
+        name: ldap-secret
+      ca:
+        name: ca-config-map
+      insecure: false
+      url: "ldaps://idm.ocp4.example.com/cn=users,cn=accounts,dc=ocp4,dc=example,dc=com?uid"
+
+
+[student@workstation auth-ldap]$ oc apply -f ldap-cr.yml 
+Warning: oc apply should be used on resource created by either oc create --save-config or oc apply
+oauth.config.openshift.io/cluster configured
+[student@workstation auth-ldap]$ watch oc get pods -n openshift-authentication
+
+
+
+[student@workstation ~]$ lab auth-ldapsync start
+
+Checking prerequisites for Guided Exercise: Synchronizing OpenShift Groups with LDAP
+
+ Verify the OpenShift cluster is running:
+ · Router pods are available...................................  SUCCESS
+ · OAuth pods are available....................................  SUCCESS
+ · API pods are available......................................  SUCCESS
+ · Control plane node 'master01' is ready......................  SUCCESS
+ · Control plane node 'master02' is ready......................  SUCCESS
+ · Control plane node 'master03' is ready......................  SUCCESS
+
+
+Setting up the classroom for Guided Exercise: Synchronizing OpenShift Groups with LDAP
+
+ Checking for conflicts with existing OpenShift projects:
+ · The 'auth-ldapsync' project is absent.......................  SUCCESS
+
+ Preparing the student's cluster:
+ · Download exercise files.....................................  SUCCESS
+ · Download solution files.....................................  SUCCESS
+ · Deleting role bindings for synced groups....................  SUCCESS
+ · Deleting synced groups......................................  SUCCESS
+ · Creating configmap: ca-config-map...........................  SUCCESS
+ · Creating secret: ldap-secret................................  SUCCESS
+ · Setting up LDAP IDP.........................................  SUCCESS
+ · Modifying /etc/ansible/ansible.cfg..........................  SUCCESS
+ · Setting up IdM..............................................  SUCCESS
+ · Remove cluster-admin rolebinding from openshift-admins if ex
+   ists........................................................  SUCCESS
+
+Overall start status...........................................  SUCCESS
+
+[student@workstation ~]$ cd DO380/labs/auth-ldapsync/
+[student@workstation auth-ldapsync]$ wget http://idm.ocp4.example.com/ipa/config/ca.crt
+--2021-04-14 11:39:43--  http://idm.ocp4.example.com/ipa/config/ca.crt
+Resolving idm.ocp4.example.com (idm.ocp4.example.com)... 192.168.50.30
+Connecting to idm.ocp4.example.com (idm.ocp4.example.com)|192.168.50.30|:80... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 1655 (1.6K)
+Saving to: ‘ca.crt’
+
+ca.crt                                               100%[=====================================================================================================================>]   1.62K  --.-KB/s    in 0s      
+
+2021-04-14 11:39:43 (297 MB/s) - ‘ca.crt’ saved [1655/1655]
+
+[student@workstation auth-ldapsync]$ vi ldap-sync.yml 
+[student@workstation auth-ldapsync]$ oc adm groups sync --sync-config ldap-sync.yml 
+Error building OpenShift group for LDAP group "cn=admins,cn=groups,cn=accounts,dc=ocp4,dc=example,dc=com": Unauthorized.
+Error building OpenShift group for LDAP group "cn=ipausers,cn=groups,cn=accounts,dc=ocp4,dc=example,dc=com": Unauthorized.
+Error building OpenShift group for LDAP group "cn=editors,cn=groups,cn=accounts,dc=ocp4,dc=example,dc=com": Unauthorized.
+Error building OpenShift group for LDAP group "cn=trust admins,cn=groups,cn=accounts,dc=ocp4,dc=example,dc=com": Unauthorized.
+Error building OpenShift group for LDAP group "cn=openshift-admins,cn=groups,cn=accounts,dc=ocp4,dc=example,dc=com": Unauthorized.
+Error building OpenShift group for LDAP group "cn=openshift-project-a,cn=groups,cn=accounts,dc=ocp4,dc=example,dc=com": Unauthorized.
+Error building OpenShift group for LDAP group "cn=openshift-users,cn=groups,cn=accounts,dc=ocp4,dc=example,dc=com": Unauthorized.
+apiVersion: v1
+items: []
+kind: List
+metadata: {}
+Unauthorized
+Unauthorized
+Unauthorized
+Unauthorized
+Unauthorized
+Unauthorized
+Unauthorized
+error: You must be logged in to the server (Unauthorized)
+error: You must be logged in to the server (Unauthorized)
+error: You must be logged in to the server (Unauthorized)
+error: You must be logged in to the server (Unauthorized)
+error: You must be logged in to the server (Unauthorized)
+error: You must be logged in to the server (Unauthorized)
+error: You must be logged in to the server (Unauthorized)
+[student@workstation auth-ldapsync]$ oc login -u admin -p redhat https://api.ocp4.example.com:6443
+Login successful.
+
+You have access to 60 projects, the list has been suppressed. You can list all projects with 'oc projects'
+
+Using project "default".
+[student@workstation auth-ldapsync]$ oc adm groups sync --sync-config ldap-sync.yml 
+apiVersion: v1
+items:
+- metadata:
+    annotations:
+      openshift.io/ldap.sync-time: 2021-04-14T11:41:22-0400
+      openshift.io/ldap.uid: cn=admins,cn=groups,cn=accounts,dc=ocp4,dc=example,dc=com
+      openshift.io/ldap.url: idm.ocp4.example.com:636
+    creationTimestamp: null
+    labels:
+      openshift.io/ldap.host: idm.ocp4.example.com
+    name: admins
+  users:
+  - admin
+- metadata:
+    annotations:
+      openshift.io/ldap.sync-time: 2021-04-14T11:41:22-0400
+      openshift.io/ldap.uid: cn=ipausers,cn=groups,cn=accounts,dc=ocp4,dc=example,dc=com
+      openshift.io/ldap.url: idm.ocp4.example.com:636
+    creationTimestamp: null
+    labels:
+      openshift.io/ldap.host: idm.ocp4.example.com
+    name: ipausers
+  users:
+  - openshift-user
+  - openshift-admin
+  - openshift-user-in-project-a
+  - non-openshift-user
+- metadata:
+<pre>    annotations:
+      openshift.io/ldap.sync-time: 2021-04-14T11:41:22-0400
+      openshift.io/ldap.uid: cn=editors,cn=groups,cn=accounts,dc=ocp4,dc=example,dc=com
+      openshift.io/ldap.url: idm.ocp4.example.com:636
+    creationTimestamp: null
+    labels:
+      openshift.io/ldap.host: idm.ocp4.example.com
+    name: editors
+  users: null
+- metadata:
+    annotations:
+      openshift.io/ldap.sync-time: 2021-04-14T11:41:22-0400
+      openshift.io/ldap.uid: cn=trust admins,cn=groups,cn=accounts,dc=ocp4,dc=example,dc=com
+      openshift.io/ldap.url: idm.ocp4.example.com:636
+    creationTimestamp: null
+    labels:
+      openshift.io/ldap.host: idm.ocp4.example.com
+    name: trust admins
+  users:
+  - admin
+- metadata:
+    annotations:
+      openshift.io/ldap.sync-time: 2021-04-14T11:41:22-0400
+      openshift.io/ldap.uid: cn=openshift-admins,cn=groups,cn=accounts,dc=ocp4,dc=example,dc=com
+      openshift.io/ldap.url: idm.ocp4.example.com:636
+    creationTimestamp: null
+    labels:
+      openshift.io/ldap.host: idm.ocp4.example.com
+    name: openshift-admins
+  users:
+  - openshift-admin
+- metadata:
+    annotations:
+      openshift.io/ldap.sync-time: 2021-04-14T11:41:22-0400
+      openshift.io/ldap.uid: cn=openshift-project-a,cn=groups,cn=accounts,dc=ocp4,dc=example,dc=com
+      openshift.io/ldap.url: idm.ocp4.example.com:636
+    creationTimestamp: null
+    labels:
+      openshift.io/ldap.host: idm.ocp4.example.com
+    name: openshift-project-a
+  users:
+  - openshift-user-in-project-a
+- metadata:
+    annotations:
+      openshift.io/ldap.sync-time: 2021-04-14T11:41:22-0400
+      openshift.io/ldap.uid: cn=openshift-users,cn=groups,cn=accounts,dc=ocp4,dc=example,dc=com
+      openshift.io/ldap.url: idm.ocp4.example.com:636
+    creationTimestamp: null
+    labels:
+      openshift.io/ldap.host: idm.ocp4.example.com
+</pre>
+    name: openshift-users
+  users:
+  - openshift-user
+kind: List
+metadata: {}
+[student@workstation auth-ldapsync]$ oc new-project auth-ldapsync
+Now using project "auth-ldapsync" on server "https://api.ocp4.example.com:6443".
+
+You can add applications to this project with the 'new-app' command. For example, try:
+
+    oc new-app ruby~https://github.com/sclorg/ruby-ex.git
+
+to build a new example application in Ruby. Or use kubectl to deploy a simple Kubernetes application:
+
+    kubectl create deployment hello-node --image=gcr.io/hello-minikube-zero-install/hello-node
+
+[student@workstation auth-ldapsync]$ oc create -f rbac.yml 
+serviceaccount/ldap-group-syncer created
+clusterrole.rbac.authorization.k8s.io/ldap-group-syncer created
+clusterrolebinding.rbac.authorization.k8s.io/ldap-group-syncer created
+[student@workstation auth-ldapsync]$ vi 
+ca.crt         cronjob.yml    ldap-sync.yml  rbac.yml       
+[student@workstation auth-ldapsync]$ vi cronjob.yml 
+[student@workstation auth-ldapsync]$ cp ldap-sync.yml cron-ldap-sync.yml
+[student@workstation auth-ldapsync]$ vi cron-ldap-sync.yml 
+[student@workstation auth-ldapsync]$ oc create configmap ldap-config --from-file cron-ldap-sync.yml=cron-ldap-sync.ym,ca.crt=ca.crt
+error: error reading cron-ldap-sync.ym: no such file or directory
+[student@workstation auth-ldapsync]$ oc create configmap ldap-config --from-file cron-ldap-sync.yml=cron-ldap-sync.yml,ca.crt=ca.crt
+configmap/ldap-config created
+[student@workstation auth-ldapsync]$ oc create secret generic ldap-secret --from-literal bindPassword='Redhat123@!'
+secret/ldap-secret created
+[student@workstation auth-ldapsync]$ oc create -f cronjob.yml 
+cronjob.batch/group-sync created
+[student@workstation auth-ldapsync]$ watch oc get cronjobs,jobs,pods
+[student@workstation auth-ldapsync]$ oc get group openshift-admins
+NAME               USERS
+openshift-admins   openshift-admin
+[student@workstation auth-ldapsync]$ ls -lt
+total 20
+-rw-rw-r--. 1 student student  731 Apr 14 11:46 cron-ldap-sync.yml
+-rw-rw-r--. 1 student student  975 Apr 14 11:43 cronjob.yml
+-rw-rw-r--. 1 student student  695 Apr 14 11:40 ldap-sync.yml
+-rw-rw-r--. 1 student student  623 Mar  2 15:11 rbac.yml
+-rw-rw-r--. 1 student student 1655 Oct  8  2020 ca.crt
+
+[student@workstation auth-ldapsync]$ cat cron-ldap-sync.yml 
+kind: LDAPSyncConfig
+apiVersion: v1
+url: ldaps://idm.ocp4.example.com
+bindDN: uid=admin,cn=users,cn=accounts,dc=ocp4,dc=example,dc=com
+bindPassword:
+    file: /etc/secrets/bindPassword
+insecure: false
+ca: /etc/config/ca.crt
+rfc2307:
+    groupsQuery:
+        baseDN: "cn=groups,cn=accounts,dc=ocp4,dc=example,dc=com"
+        scope: sub
+        derefAliases: never
+        pageSize: 0
+        filter: (objectClass=ipausergroup)
+    groupUIDAttribute: dn
+    groupNameAttributes: [ cn ]
+    groupMembershipAttributes: [ member ]
+    usersQuery:
+        baseDN: "cn=users,cn=accounts,dc=ocp4,dc=example,dc=com"
+        scope: sub
+        derefAliases: never
+        pageSize: 0
+    userUIDAttribute: dn
+    userNameAttributes: [ uid ]
+[student@workstation auth-ldapsync]$ cat cronjob.yml 
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: group-sync
+  namespace: auth-ldapsync
+spec:
+  schedule: "*/1 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: hello
+            image: registry.redhat.io/openshift4/ose-cli:v4.5
+            command:
+            - /bin/sh
+            - -c
+            - oc adm groups sync --sync-config=/etc/config/cron-ldap-sync.yml --confirm
+            volumeMounts:
+              - mountPath: "/etc/config"
+                name: "ldap-sync-volume"
+              - mountPath: "/etc/secrets"
+                name: "ldap-bind-password"
+          volumes:
+            - name: "ldap-sync-volume"
+              configMap:
+                name: ldap-config
+            - name: "ldap-bind-password"
+              secret:
+                secretName: ldap-secret
+          serviceAccountName: ldap-group-syncer
+          serviceAccount: ldap-group-syncer
+
+[student@workstation auth-ldapsync]$ cat ldap-sync.yml 
+kind: LDAPSyncConfig
+apiVersion: v1
+url: ldaps://idm.ocp4.example.com
+bindDN: uid=admin,cn=users,cn=accounts,dc=ocp4,dc=example,dc=com
+bindPassword: Redhat123@!
+insecure: false
+ca: ca.crt
+rfc2307:
+    groupsQuery:
+        baseDN: "cn=groups,cn=accounts,dc=ocp4,dc=example,dc=com"
+        scope: sub
+        derefAliases: never
+        pageSize: 0
+        filter: (objectClass=ipausergroup)
+    groupUIDAttribute: dn
+    groupNameAttributes: [ cn ]
+    groupMembershipAttributes: [ member ]
+    usersQuery:
+        baseDN: "cn=users,cn=accounts,dc=ocp4,dc=example,dc=com"
+        scope: sub
+        derefAliases: never
+        pageSize: 0
+    userUIDAttribute: dn
+    userNameAttributes: [ uid ]
+[student@workstation auth-ldapsync]$ cat rbac.yml 
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ldap-group-syncer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ldap-group-syncer
+rules:
+  - apiGroups:
+      - ""
+      - "user.openshift.io"
+    resources:
+      - "groups"
+    verbs:
+      - "get"
+      - "list"
+      - "create"
+      - "update"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ldap-group-syncer
+subjects:
+- kind: ServiceAccount
+  name: ldap-group-syncer
+  namespace: auth-ldapsync
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ldap-group-syncer
+
+
+
+[student@workstation ~]$ oc policy who-can get oauth
+resourceaccessreviewresponse.authorization.openshift.io/<unknown> 
+
+Namespace: auth-ldapsync
+Verb:      get
+Resource:  oauths.config.openshift.io
+
+Users:  admin
+        system:admin
+        system:serviceaccount:kube-system:generic-garbage-collector
+        system:serviceaccount:kube-system:namespace-controller
+        system:serviceaccount:openshift-apiserver-operator:openshift-apiserver-operator
+        system:serviceaccount:openshift-apiserver:openshift-apiserver-sa
+        system:serviceaccount:openshift-authentication-operator:authentication-operator
+        system:serviceaccount:openshift-authentication:oauth-openshift
+        system:serviceaccount:openshift-cluster-storage-operator:csi-snapshot-controller-operator
+        system:serviceaccount:openshift-cluster-version:default
+        system:serviceaccount:openshift-config-operator:openshift-config-operator
+        system:serviceaccount:openshift-controller-manager-operator:openshift-controller-manager-operator
+        system:serviceaccount:openshift-controller-manager:openshift-controller-manager-sa
+        system:serviceaccount:openshift-etcd-operator:etcd-operator
+        system:serviceaccount:openshift-etcd:installer-sa
+        system:serviceaccount:openshift-insights:gather
+        system:serviceaccount:openshift-kube-apiserver-operator:kube-apiserver-operator
+        system:serviceaccount:openshift-kube-apiserver:installer-sa
+        system:serviceaccount:openshift-kube-apiserver:localhost-recovery-client
+        system:serviceaccount:openshift-kube-controller-manager-operator:kube-controller-manager-operator
+        system:serviceaccount:openshift-kube-controller-manager:installer-sa
+        system:serviceaccount:openshift-kube-controller-manager:localhost-recovery-client
+        system:serviceaccount:openshift-kube-scheduler-operator:openshift-kube-scheduler-operator
+        system:serviceaccount:openshift-kube-scheduler:installer-sa
+        system:serviceaccount:openshift-kube-scheduler:localhost-recovery-client
+        system:serviceaccount:openshift-kube-storage-version-migrator-operator:kube-storage-version-migrator-operator
+        system:serviceaccount:openshift-kube-storage-version-migrator:kube-storage-version-migrator-sa
+        system:serviceaccount:openshift-machine-config-operator:default
+        system:serviceaccount:openshift-network-operator:default
+        system:serviceaccount:openshift-operator-lifecycle-manager:olm-operator-serviceaccount
+        system:serviceaccount:openshift-service-ca-operator:service-ca-operator
+        system:serviceaccount:openshift-service-catalog-removed:openshift-service-catalog-apiserver-remover
+        system:serviceaccount:openshift-service-catalog-removed:openshift-service-catalog-controller-manager-remover
+Groups: system:cluster-admins
+        system:cluster-readers
+        system:masters
+
+[student@workstation ~]$ oc adm policy add-cluster-role-to-group cluster-admin openshift-admins
+clusterrole.rbac.authorization.k8s.io/cluster-admin added: "openshift-admins"
+[student@workstation ~]$ oc policy who-can get oauth
+resourceaccessreviewresponse.authorization.openshift.io/<unknown> 
+
+Namespace: auth-ldapsync
+Verb:      get
+Resource:  oauths.config.openshift.io
+
+Users:  admin
+        system:admin
+        system:serviceaccount:kube-system:generic-garbage-collector
+        system:serviceaccount:kube-system:namespace-controller
+        system:serviceaccount:openshift-apiserver-operator:openshift-apiserver-operator
+        system:serviceaccount:openshift-apiserver:openshift-apiserver-sa
+        system:serviceaccount:openshift-authentication-operator:authentication-operator
+        system:serviceaccount:openshift-authentication:oauth-openshift
+        system:serviceaccount:openshift-cluster-storage-operator:csi-snapshot-controller-operator
+        system:serviceaccount:openshift-cluster-version:default
+        system:serviceaccount:openshift-config-operator:openshift-config-operator
+        system:serviceaccount:openshift-controller-manager-operator:openshift-controller-manager-operator
+        system:serviceaccount:openshift-controller-manager:openshift-controller-manager-sa
+        system:serviceaccount:openshift-etcd-operator:etcd-operator
+        system:serviceaccount:openshift-etcd:installer-sa
+        system:serviceaccount:openshift-insights:gather
+        system:serviceaccount:openshift-kube-apiserver-operator:kube-apiserver-operator
+        system:serviceaccount:openshift-kube-apiserver:installer-sa
+        system:serviceaccount:openshift-kube-apiserver:localhost-recovery-client
+        system:serviceaccount:openshift-kube-controller-manager-operator:kube-controller-manager-operator
+        system:serviceaccount:openshift-kube-controller-manager:installer-sa
+        system:serviceaccount:openshift-kube-controller-manager:localhost-recovery-client
+        system:serviceaccount:openshift-kube-scheduler-operator:openshift-kube-scheduler-operator
+        system:serviceaccount:openshift-kube-scheduler:installer-sa
+        system:serviceaccount:openshift-kube-scheduler:localhost-recovery-client
+        system:serviceaccount:openshift-kube-storage-version-migrator-operator:kube-storage-version-migrator-operator
+        system:serviceaccount:openshift-kube-storage-version-migrator:kube-storage-version-migrator-sa
+        system:serviceaccount:openshift-machine-config-operator:default
+        system:serviceaccount:openshift-network-operator:default
+        system:serviceaccount:openshift-operator-lifecycle-manager:olm-operator-serviceaccount
+        system:serviceaccount:openshift-service-ca-operator:service-ca-operator
+        system:serviceaccount:openshift-service-catalog-removed:openshift-service-catalog-apiserver-remover
+        system:serviceaccount:openshift-service-catalog-removed:openshift-service-catalog-controller-manager-remover
+Groups: openshift-admins
+        system:cluster-admins
+        system:cluster-readers
+        system:masters
+
+[student@workstation ~]$ oc adm policy remove-cluster-role-from-group cluster-admin openshift-admins
+Warning: Your changes may get lost whenever a master is restarted, unless you prevent reconciliation of this rolebinding using the following command: oc annotate clusterrolebinding.rbac cluster-admin 'rbac.authorization.kubernetes.io/autoupdate=false' --overwrite
+Warning: Your changes may get lost whenever a master is restarted, unless you prevent reconciliation of this rolebinding using the following command: oc annotate clusterrolebinding.rbac cluster-admins 'rbac.authorization.kubernetes.io/autoupdate=false' --overwrite
+clusterrole.rbac.authorization.k8s.io/cluster-admin removed: "openshift-admins"
+[student@workstation ~]$ oc delete project auth-ldapsync 
+project.project.openshift.io "auth-ldapsync" deleted
+[student@workstation ~]$ lab auth-ldapsync finish
+
+
+[student@workstation ~]$ lab certificates-troubleshoot start
+
+Checking prerequisites for Guided Exercise: Troubleshooting OpenShift Certificates
+
+ Verify the OpenShift cluster is running:
+ · Router pods are available...................................  SUCCESS
+ · OAuth pods are available....................................  SUCCESS
+ · API pods are available......................................  SUCCESS
+ · Control plane node 'master01' is ready......................  SUCCESS
+ · Control plane node 'master02' is ready......................  SUCCESS
+ · Control plane node 'master03' is ready......................  SUCCESS
+
+
+Setting up the classroom for Guided Exercise: Troubleshooting OpenShift Certificates
+
+ Preparing the student's cluster:
+ · Download exercise files.....................................  SUCCESS
+ · Modifying /etc/ansible/ansible.cfg..........................  SUCCESS
+ · Creating Classroom CA Certificate...........................  SUCCESS
+ · Creating Wildcard Certificate...............................  SUCCESS
+ · Creating 'wildcard-bundle' configuration map................  SUCCESS
+ · Patching the cluster-wide proxy.............................  SUCCESS
+ · Creating 'wildcard-tls' secret..............................  SUCCESS
+ · Patching the default ingress controller operator............  SUCCESS
+ · Creating Master API Certificate.............................  SUCCESS
+ · Creating 'api-tls' secret...................................  SUCCESS
+ · Patching the cluster apiserver..............................  SUCCESS
+
+Overall start status...........................................  SUCCESS
+
+[student@workstation ~]$ curl -k -v https://console-openshift-console.apps.ocp4.example.com 2>&1 | grep -E 'date|expired'
+*  start date: Apr 14 18:35:30 2021 GMT
+*  expire date: Apr 14 18:35:31 2023 GMT
+< date: Thu, 15 Apr 2021 13:17:28 GMT
+[student@workstation ~]$ oc get proxy/cluster  -o jsonpath='{.spec.trustedCA.name}{"\n"}'
+wildcard-bundle
+[student@workstation ~]$ oc extract configmap/wildcard-bundle -n openshift-config --to /tmp/ --confirm
+/tmp/ca-bundle.crt
+[student@workstation ~]$ openssl x509 -in /tmp/ca-bundle.crt -noout -dates -serial
+notBefore=Apr 15 13:16:40 2021 GMT
+notAfter=Apr 15 13:17:40 2021 GMT
+serial=3A50E4191D9FF461B0EC81E1D7CA53C6D09DE76F
+
+[student@workstation ~]$ oc get ingresscontroller/default -n openshift-ingress-operator -o jsonpath='{.spec.defaultCertificate.name}{"\n"}'
+wildcard-tls
+
+[student@workstation ~]$ oc extract secret/wildcard-tls -n openshift-ingress --to /tmp/ --confirm
+/tmp/tls.crt
+/tmp/tls.key
+
+[student@workstation ~]$ openssl x509 -in /tmp/tls.crt -noout -dates -serial
+notBefore=Apr 15 13:16:40 2021 GMT
+notAfter=Apr 15 13:17:40 2021 GMT
+serial=3A50E4191D9FF461B0EC81E1D7CA53C6D09DE76F
+[student@workstation ~]$ cd DO380/labs/certificates-troubleshoot/
+[student@workstation certificates-troubleshoot]$ ls -lt
+total 48
+-rw-r--r--. 2 root    root    4365 Apr 15 09:16 api-combined.pem
+-rw-r--r--. 2 student student 2151 Apr 15 09:16 api.pem
+-r--------. 2 student student 3243 Apr 15 09:16 api-key.pem
+-rw-r--r--. 2 root    root    4381 Apr 15 09:16 wildcard-combined.pem
+-rw-r--r--. 2 student student 2167 Apr 15 09:16 wildcard.pem
+-r--------. 2 student student 3243 Apr 15 09:16 wildcard-key.pem
+-rwxrwxr-x. 1 student student 4559 Mar  2 15:11 check_cert_expiration.sh
+-rwxrwxr-x. 1 student student  226 Mar  2 15:11 renew_api.sh
+-rwxrwxr-x. 1 student student  173 Mar  2 15:11 renew_wildcard.sh
+[student@workstation certificates-troubleshoot]$ cat renew_wildcard.sh 
+#!/usr/bin/bash
+
+ansible-playbook /usr/local/lib/ansible/certs/wildcard.yml -e cert_path=$(pwd) -e "not_after=+3650d" -e update_cert=True -e combined_name=wildcard-combined
+[student@workstation certificates-troubleshoot]$ cat renew_api.sh 
+#!/usr/bin/bash
+
+ansible-playbook /usr/local/lib/ansible/certs/custom.yml -e cert_path=$(pwd) -e cert_name=api -e 'cert_comment="Master API Certificate"' -e "not_after=+3650d" -e update_cert=True -e combined_name=api-combined
+
+
+[student@workstation ~]$ ls -lt /usr/local/lib/ansible/
+total 0
+drwxrwxr-x. 2 root root  27 Mar  2 15:11 auth
+drwxrwxr-x. 2 root root  92 Mar  2 15:11 certs
+drwxrwxr-x. 2 root root  24 Mar  2 15:11 config
+drwxrwxr-x. 2 root root  19 Mar  2 15:11 inventory
+drwxrwxr-x. 2 root root  55 Mar  2 15:11 k8s-optimize
+drwxrwxr-x. 2 root root  95 Mar  2 15:11 logging-deploy
+drwxrwxr-x. 2 root root 175 Mar  2 15:11 logging-review
+drwxrwxr-x. 3 root root  96 Mar  2 15:11 monitor
+drwxrwxr-x. 2 root root  31 Mar  2 15:11 pools
+drwxrwxr-x. 2 root root  20 Mar  2 15:11 roles
+drwxrwxr-x. 3 root root 127 Mar  2 15:11 storage
+[student@workstation ~]$ ls -lt /usr/local/lib/
+total 144
+-rwxr-xr-x.  1 root root 11027 Apr 15 09:16 lab-certificates-troubleshoot
+-rwxr-xr-x.  1 root root 10059 Apr 14 14:14 lab-certificates-app-trust
+-rwxr-xr-x.  1 root root  4175 Apr 14 13:02 lab-certificates-enterprise-ca
+-rwxr-xr-x.  1 root root  2270 Apr 14 11:38 lab-auth-ldapsync
+-rwxr-xr-x.  1 root root  1805 Apr 14 11:06 lab-auth-ldap
+-rwxr-xr-x.  1 root root  3858 Apr 14 09:43 lab-gitops-gitops
+-rwxr-xr-x.  1 root root  1799 Apr 14 09:21 lab-gitops-resources
+-rwxr-xr-x.  1 root root  2316 Apr 13 14:17 lab-gitops-deploy
+-rwxr-xr-x.  1 root root  3016 Apr 13 13:08 lab-operators-review
+-rwxr-xr-x.  1 root root  2097 Apr 13 12:59 lab-operators-cluster
+-rwxr-xr-x.  1 root root  2257 Apr 13 11:40 lab-operators-install
+-rwxr-xr-x.  1 root root  1923 Apr 13 10:19 lab-automation-ansible
+-rwxr-xr-x.  1 root root  1437 Apr 13 09:51 lab-automation-rest
+-rwxr-xr-x.  1 root root  2274 Apr 12 14:54 lab-automation-scripts
+-rwxr-xr-x.  1 root root  2312 Apr 12 14:12 lab-automation-resources
+-rwxr-xr-x.  1 root root  2137 Apr 12 12:41 lab-k8s-optimize
+-rwxr-xr-x.  1 root root  1875 Apr 12 10:11 lab-k8s-deploy
+-rw-r--r--.  1 root root 44075 Apr 12 10:11 labtool.do380.shlib
+-rw-r--r--.  1 root root 11789 Apr 12 10:11 labtool.shlib
+drwxrwxr-x. 13 root root   182 Mar  2 15:11 ansible
+[student@workstation ~]$ which lab
+/usr/local/bin/lab
+[student@workstation ~]$ ls -lt /usr/local/bin
+total 16
+-rwxr-xr-x. 1 root root 5593 Oct  8  2020 lab
+-rwxr-xr-x. 1 root root 8138 May  7  2020 rht-verify-workstation
+[student@workstation ~]$ tar cvf ./Documents/lab.scripts.tar ^C
+[student@workstation ~]$ cd /usr/local/lib
+[student@workstation lib]$ tar cvf /home/student/Documents/lab.scripts.tar lab*
+lab-auth-ldap
+lab-auth-ldapsync
+lab-automation-ansible
+lab-automation-resources
+lab-automation-rest
+lab-automation-scripts
+lab-certificates-app-trust
+lab-certificates-enterprise-ca
+lab-certificates-troubleshoot
+lab-gitops-deploy
+lab-gitops-gitops
+lab-gitops-resources
+lab-k8s-deploy
+lab-k8s-optimize
+lab-operators-cluster
+lab-operators-install
+lab-operators-review
+labtool.do380.shlib
+labtool.shlib
+[student@workstation lib]$ cd ../bin/
+[student@workstation bin]$ tar cvf /home/student/Documents/lab.scripts.usrlocalbin.tar *
+lab
+rht-verify-workstation
+
+
+
+
+### LAB CERTS ### 
+
+[student@workstation ~]$ lab certificates-review start
+
+Checking prerequisites for Lab: Configuring Trusted TLS Certificates
+
+ Verify the OpenShift cluster is running:
+ · Router pods are available...................................  SUCCESS
+ · OAuth pods are available....................................  SUCCESS
+ · API pods are available......................................  SUCCESS
+ · Control plane node 'master01' is ready......................  SUCCESS
+ · Control plane node 'master02' is ready......................  SUCCESS
+ · Control plane node 'master03' is ready......................  SUCCESS
+
+
+Setting up the classroom for Lab: Configuring Trusted TLS Certificates
+
+ Preparing the student's cluster:
+ · Download exercise files.....................................  SUCCESS
+ · Modifying /etc/ansible/ansible.cfg..........................  SUCCESS
+ · Creating Classroom CA Certificate...........................  SUCCESS
+ · Creating Wildcard and Master API Certificate................  SUCCESS
+
+Overall start status...........................................  SUCCESS
+
+[student@workstation ~]$ cd DO380/labs/certificates-review/
+[student@workstation certificates-review]$ oc create configmap review-bundle --from-file ca-bundle.crt=review-combined.pem -n openshift-config
+Unable to connect to the server: x509: certificate signed by unknown authority
+[student@workstation certificates-review]$ set -o vi
+[student@workstation certificates-review]$ oc login -u admin -p redhat https://api.ocp4.example.com:6443
+The server uses a certificate signed by an unknown authority.
+You can bypass the certificate check, but any data you send to the server could be intercepted by others.
+Use insecure connections? (y/n): y
+
+Login successful.
+
+You have access to 60 projects, the list has been suppressed. You can list all projects with 'oc projects'
+
+Using project "default".
+[student@workstation certificates-review]$ oc create configmap review-bundle --from-file ca-bundle.crt=review-combined.pem -n openshift-config
+configmap/review-bundle created
+[student@workstation certificates-review]$ vim proxy-cluster.yml 
+[student@workstation certificates-review]$ oc apply -f proxy-cluster.yml 
+proxy.config.openshift.io/cluster configured
+[student@workstation certificates-review]$ oc create secret tls review-tls --cert review-combined.pem --key review-key.pem -n openshift-ingress
+secret/review-tls created
+[student@workstation certificates-review]$ vim ingresscontrollers.yml 
+[student@workstation certificates-review]$ oc apply -f ingresscontrollers.yml 
+ingresscontroller.operator.openshift.io/default configured
+
+[student@workstation certificates-review]$ cat proxy-cluster.yml 
+apiVersion: config.openshift.io/v1
+kind: Proxy
+metadata:
+  name: cluster
+spec:
+  trustedCA:
+    name: review-bundle
+[student@workstation certificates-review]$ cat ingresscontrollers.yml 
+apiVersion: operator.openshift.io/v1
+kind: IngressController
+metadata:
+  finalizers:
+  - ingresscontroller.operator.openshift.io/finalizer-ingresscontroller
+  name: default
+  namespace: openshift-ingress-operator
+spec:
+  defaultCertificate:
+    name: review-tls
+  replicas: 2
+
+[student@workstation certificates-review]$ oc create secret tls review-tls --cert review-combined.pem --key review-key.pem -n openshift-config
+secret/review-tls created
+[student@workstation certificates-review]$ vim apiserver-cluster.yml 
+[student@workstation certificates-review]$ cat apiserver-cluster.yml 
+apiVersion: config.openshift.io/v1
+kind: APIServer
+metadata:
+  name: cluster
+spec:
+  servingCerts:
+    namedCertificates:
+    - names:
+      - api.ocp4.example.com
+      servingCertificate:
+        name: review-tls
+[student@workstation certificates-review]$ oc apply -f apiserver-cluster.yml 
+apiserver.config.openshift.io/cluster configured
+[student@workstation certificates-review]$ oc get pods -n openshift-ingress
+NAME                              READY   STATUS    RESTARTS   AGE
+router-default-66d899d8db-kfmlc   1/1     Running   0          2m54s
+router-default-66d899d8db-ktlnt   1/1     Running   0          4m4s
+[student@workstation certificates-review]$ oc whoami --show-console
+https://console-openshift-console.apps.ocp4.example.com
+
+
+
+[lab@utility ~]$ cat /var/www/html/openshift4/4.5.4/ignitions/worker.ign | jq
+{
+  "ignition": {
+    "config": {
+      "append": [
+        {
+          "source": "https://api-int.ocp4.example.com:22623/config/worker",
+          "verification": {}
+        }
+      ]
+    },
+    "security": {
+      "tls": {
+        "certificateAuthorities": [
+          {
+            "source": "data:text/plain;charset=utf-8;base64,LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURFRENDQWZpZ0F3SUJBZ0lJUzhJU081UjJIUXN3RFFZSktvWklodmNOQVFFTEJRQXdKakVTTUJBR0ExVUUKQ3hNSmIzQmxibk5vYVdaME1SQXdEZ1lEVlFRREV3ZHliMjkwTFdOaE1CNFhEVEl3TVRBd09ERTNOVFl5TlZvWApEVE13TVRBd05qRTNOVFl5TlZvd0pqRVNNQkFHQTFVRUN4TUpiM0JsYm5Ob2FXWjBNUkF3RGdZRFZRUURFd2R5CmIyOTBMV05oTUlJQklqQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUFteGF0VXJ4WUpSalEKRktWbldndmUzd2VueU01TkhMRUk4anNVU1lFUzYrSTQ5VkxkemZLZU15dXkzSkh6NzRUdVl4Uy9hOUZpTHI1WAp6VWJhcW9tNThkaHZrYm5wZVRyOTVUcE82cjFPWFNyUUdnMnBTYTdvVWF1YWNDcGYrRTVlS3pWYmRzWm44NUl3CjJQWHYxbEU1ajNWMHFqdDBZUE5rd3dUR2h2UmNvVWxyOFdiTEZHRFI5Ull3d0JSUHNCN1ROaXNxdUd1NGI2S08KbFZhTzR4SW5PVUpscEtHUGhXWXphdVNWVy8rVmVzaUtTUW1CV0o2VllBeGhKMlhKMUdVdnNySkxnVzhEVmJVMwpYQjVpQjZkMTRqMU5xamNaNnV2QXEzV2xtK2tFTHJUcTRIbS9ocHJrYm4xeU9rQzRCR1lvM0Y5NkhFRmcrZDZiCnVOeHVKRTlBendJREFRQUJvMEl3UURBT0JnTlZIUThCQWY4RUJBTUNBcVF3RHdZRFZSMFRBUUgvQkFVd0F3RUIKL3pBZEJnTlZIUTRFRmdRVTg1ZXZRc1J0K3FRVkxZekRUOCtBUUd0cWZ5WXdEUVlKS29aSWh2Y05BUUVMQlFBRApnZ0VCQUFuSlNHcitnVDJPN3M0Y2VnaEhDdkM3ZFlyaExHeGgyL3BTdHVGTnZxVERxM2tBNCtrWklaVWZvM0xXCkYwMHFoTFNzRkx3UkoycHR5ZENscjhQdjc1Z2M0SVNyRXJsWGY0M0Njbnp4Zm9ZMnp0eE9YaytYR05yTUE5OWMKanozcVBPZnFkaG9SdkdndFpyV1NES2M4MncrK1FORHRKU1YxNE96MEprOTVtcnAvNGU1WEd4bHZBSi9WYjM5VApDb3B6dll6R2VBWEU4YThyV05PTndmSzIzam5KUjlnWlpSbVd5eSs5V1lWOFJqTTJoczM4TU1BeVVucHVZc05BCnZ4TXRWYjlBenBmb3BKT2ZXZE9Vb1ZINXRMY1dwdHo3aTUwV093TXN6UDd5U3RrTklGeFpURjg4MlBISXJPWDQKb3NvdzAycGFER3FHLyt6MkcrcUxZdm1pMVBNPQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==",
+            "verification": {}
+          }
+        ]
+      }
+    },
+    "timeouts": {},
+    "version": "2.2.0"
+  },
+  "networkd": {},
+  "passwd": {},
+  "storage": {
+    "files": [
+      {
+        "filesystem": "root",
+        "path": "/etc/NetworkManager/conf.d/dhcp.conf",
+        "user": {
+          "name": "root"
+        },
+        "contents": {
+          "source": "data:text/plain;charset=utf-8;base64,W2Nvbm5lY3Rpb25dCmlwdjQuZGhjcC10aW1lb3V0PTYwMAo=",
+          "verification": {}
+        },
+        "mode": 644
+      }
+    ]
+  },
+  "systemd": {
+    "units": [
+      {
+        "name": "NetworkManager-wait-online.service",
+        "enable": true,
+        "contents": "[Unit]\nDescription=Network Manager Wait Online\nDocumentation=man:nm-online(1)\nRequires=NetworkManager.service\nAfter=NetworkManager.service\nBefore=network-online.target\n\n[Service]\nTyp
+e=oneshot\nExecStart=/usr/bin/nm-online -s -q --timeout=600\nRemainAfterExit=yes\n\n[Install]\nWantedBy=network-online.target"
+      }
+    ]
+  }
+}
+
+[lab@utility ~]$ echo "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURFRENDQWZpZ0F3SUJBZ0lJUzhJU081UjJIUXN3RFFZSktvWklodmNOQVFFTEJRQXdKakVTTUJBR0ExVUUKQ3hNSmIzQmxibk5vYVdaME1SQXdEZ1lEVlFRREV3ZHliMjkwTFdOaE1CNFhEVEl3TVRBd09ERTNOVFl5TlZvWApEVE13TVRBd05qRTNOVFl5TlZvd0pqRVNNQkFHQTFVRUN4TUpiM0JsYm5Ob2FXWjBNUkF3RGdZRFZRUURFd2R5CmIyOTBMV05oTUlJQklqQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUFteGF0VXJ4WUpSalEKRktWbldndmUzd2VueU01TkhMRUk4anNVU1lFUzYrSTQ5VkxkemZLZU15dXkzSkh6NzRUdVl4Uy9hOUZpTHI1WAp6VWJhcW9tNThkaHZrYm5wZVRyOTVUcE82cjFPWFNyUUdnMnBTYTdvVWF1YWNDcGYrRTVlS3pWYmRzWm44NUl3CjJQWHYxbEU1ajNWMHFqdDBZUE5rd3dUR2h2UmNvVWxyOFdiTEZHRFI5Ull3d0JSUHNCN1ROaXNxdUd1NGI2S08KbFZhTzR4SW5PVUpscEtHUGhXWXphdVNWVy8rVmVzaUtTUW1CV0o2VllBeGhKMlhKMUdVdnNySkxnVzhEVmJVMwpYQjVpQjZkMTRqMU5xamNaNnV2QXEzV2xtK2tFTHJUcTRIbS9ocHJrYm4xeU9rQzRCR1lvM0Y5NkhFRmcrZDZiCnVOeHVKRTlBendJREFRQUJvMEl3UURBT0JnTlZIUThCQWY4RUJBTUNBcVF3RHdZRFZSMFRBUUgvQkFVd0F3RUIKL3pBZEJnTlZIUTRFRmdRVTg1ZXZRc1J0K3FRVkxZekRUOCtBUUd0cWZ5WXdEUVlKS29aSWh2Y05BUUVMQlFBRApnZ0VCQUFuSlNHcitnVDJPN3M0Y2VnaEhDdkM3ZFlyaExHeGgyL3BTdHVGTnZxVERxM2tBNCtrWklaVWZvM0xXCkYwMHFoTFNzRkx3UkoycHR5ZENscjhQdjc1Z2M0SVNyRXJsWGY0M0Njbnp4Zm9ZMnp0eE9YaytYR05yTUE5OWMKanozcVBPZnFkaG9SdkdndFpyV1NES2M4MncrK1FORHRKU1YxNE96MEprOTVtcnAvNGU1WEd4bHZBSi9WYjM5VApDb3B6dll6R2VBWEU4YThyV05PTndmSzIzam5KUjlnWlpSbVd5eSs5V1lWOFJqTTJoczM4TU1BeVVucHVZc05BCnZ4TXRWYjlBenBmb3BKT2ZXZE9Vb1ZINXRMY1dwdHo3aTUwV093TXN6UDd5U3RrTklGeFpURjg4MlBISXJPWDQKb3NvdzAycGFER3FHLyt6MkcrcUxZdm1pMVBNPQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==" | base64 -d
+-----BEGIN CERTIFICATE-----
+MIIDEDCCAfigAwIBAgIIS8ISO5R2HQswDQYJKoZIhvcNAQELBQAwJjESMBAGA1UE
+CxMJb3BlbnNoaWZ0MRAwDgYDVQQDEwdyb290LWNhMB4XDTIwMTAwODE3NTYyNVoX
+DTMwMTAwNjE3NTYyNVowJjESMBAGA1UECxMJb3BlbnNoaWZ0MRAwDgYDVQQDEwdy
+b290LWNhMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmxatUrxYJRjQ
+FKVnWgve3wenyM5NHLEI8jsUSYES6+I49VLdzfKeMyuy3JHz74TuYxS/a9FiLr5X
+zUbaqom58dhvkbnpeTr95TpO6r1OXSrQGg2pSa7oUauacCpf+E5eKzVbdsZn85Iw
+2PXv1lE5j3V0qjt0YPNkwwTGhvRcoUlr8WbLFGDR9RYwwBRPsB7TNisquGu4b6KO
+lVaO4xInOUJlpKGPhWYzauSVW/+VesiKSQmBWJ6VYAxhJ2XJ1GUvsrJLgW8DVbU3
+XB5iB6d14j1NqjcZ6uvAq3Wlm+kELrTq4Hm/hprkbn1yOkC4BGYo3F96HEFg+d6b
+uNxuJE9AzwIDAQABo0IwQDAOBgNVHQ8BAf8EBAMCAqQwDwYDVR0TAQH/BAUwAwEB
+/zAdBgNVHQ4EFgQU85evQsRt+qQVLYzDT8+AQGtqfyYwDQYJKoZIhvcNAQELBQAD
+ggEBAAnJSGr+gT2O7s4ceghHCvC7dYrhLGxh2/pStuFNvqTDq3kA4+kZIZUfo3LW
+F00qhLSsFLwRJ2ptydClr8Pv75gc4ISrErlXf43CcnzxfoY2ztxOXk+XGNrMA99c
+jz3qPOfqdhoRvGgtZrWSDKc82w++QNDtJSV14Oz0Jk95mrp/4e5XGxlvAJ/Vb39T
+CopzvYzGeAXE8a8rWNONwfK23jnJR9gZZRmWyy+9WYV8RjM2hs38MMAyUnpuYsNA
+vxMtVb9AzpfopJOfWdOUoVH5tLcWptz7i50WOwMszP7yStkNIFxZTF882PHIrOX4
+osow02paDGqG/+z2G+qLYvmi1PM=
+-----END CERTIFICATE-----
+
+[lab@utility ~]$ echo "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURFRENDQWZpZ0F3SUJBZ0lJUzhJU081UjJIUXN3RFFZSktvWklodmNOQVFFTEJRQXdKakVTTUJBR0ExVUUKQ3hNSmIzQmxibk5vYVdaME1SQXdEZ1lEVlFRREV3ZHliMjkwTFdOaE1CNFhEVEl3TVRBd09ERTNOVFl5TlZvWApEVE13TVRBd05qRTNOVFl5TlZvd0pqRVNNQkFHQTFVRUN4TUpiM0JsYm5Ob2FXWjBNUkF3RGdZRFZRUURFd2R5CmIyOTBMV05oTUlJQklqQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUFteGF0VXJ4WUpSalEKRktWbldndmUzd2VueU01TkhMRUk4anNVU1lFUzYrSTQ5VkxkemZLZU15dXkzSkh6NzRUdVl4Uy9hOUZpTHI1WAp6VWJhcW9tNThkaHZrYm5wZVRyOTVUcE82cjFPWFNyUUdnMnBTYTdvVWF1YWNDcGYrRTVlS3pWYmRzWm44NUl3CjJQWHYxbEU1ajNWMHFqdDBZUE5rd3dUR2h2UmNvVWxyOFdiTEZHRFI5Ull3d0JSUHNCN1ROaXNxdUd1NGI2S08KbFZhTzR4SW5PVUpscEtHUGhXWXphdVNWVy8rVmVzaUtTUW1CV0o2VllBeGhKMlhKMUdVdnNySkxnVzhEVmJVMwpYQjVpQjZkMTRqMU5xamNaNnV2QXEzV2xtK2tFTHJUcTRIbS9ocHJrYm4xeU9rQzRCR1lvM0Y5NkhFRmcrZDZiCnVOeHVKRTlBendJREFRQUJvMEl3UURBT0JnTlZIUThCQWY4RUJBTUNBcVF3RHdZRFZSMFRBUUgvQkFVd0F3RUIKL3pBZEJnTlZIUTRFRmdRVTg1ZXZRc1J0K3FRVkxZekRUOCtBUUd0cWZ5WXdEUVlKS29aSWh2Y05BUUVMQlFBRApnZ0VCQUFuSlNHcitnVDJPN3M0Y2VnaEhDdkM3ZFlyaExHeGgyL3BTdHVGTnZxVERxM2tBNCtrWklaVWZvM0xXCkYwMHFoTFNzRkx3UkoycHR5ZENscjhQdjc1Z2M0SVNyRXJsWGY0M0Njbnp4Zm9ZMnp0eE9YaytYR05yTUE5OWMKanozcVBPZnFkaG9SdkdndFpyV1NES2M4MncrK1FORHRKU1YxNE96MEprOTVtcnAvNGU1WEd4bHZBSi9WYjM5VApDb3B6dll6R2VBWEU4YThyV05PTndmSzIzam5KUjlnWlpSbVd5eSs5V1lWOFJqTTJoczM4TU1BeVVucHVZc05BCnZ4TXRWYjlBenBmb3BKT2ZXZE9Vb1ZINXRMY1dwdHo3aTUwV093TXN6UDd5U3RrTklGeFpURjg4MlBISXJPWDQKb3NvdzAycGFER3FHLyt6MkcrcUxZdm1pMVBNPQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==" | base64 -d | openssl x509 -noout -text
+Certificate:
+    Data:
+        Version: 3 (0x2)
+        Serial Number: 5458945745429601547 (0x4bc2123b94761d0b)
+        Signature Algorithm: sha256WithRSAEncryption
+        Issuer: OU = openshift, CN = root-ca
+        Validity
+            Not Before: Oct  8 17:56:25 2020 GMT
+            Not After : Oct  6 17:56:25 2030 GMT
+        Subject: OU = openshift, CN = root-ca
+        Subject Public Key Info:
+            Public Key Algorithm: rsaEncryption
+                RSA Public-Key: (2048 bit)
+                Modulus:
+                    00:9b:16:ad:52:bc:58:25:18:d0:14:a5:67:5a:0b:
+                    de:df:07:a7:c8:ce:4d:1c:b1:08:f2:3b:14:49:81:
+                    12:eb:e2:38:f5:52:dd:cd:f2:9e:33:2b:b2:dc:91:
+                    f3:ef:84:ee:63:14:bf:6b:d1:62:2e:be:57:cd:46:
+                    da:aa:89:b9:f1:d8:6f:91:b9:e9:79:3a:fd:e5:3a:
+                    4e:ea:bd:4e:5d:2a:d0:1a:0d:a9:49:ae:e8:51:ab:
+                    9a:70:2a:5f:f8:4e:5e:2b:35:5b:76:c6:67:f3:92:
+                    30:d8:f5:ef:d6:51:39:8f:75:74:aa:3b:74:60:f3:
+                    64:c3:04:c6:86:f4:5c:a1:49:6b:f1:66:cb:14:60:
+                    d1:f5:16:30:c0:14:4f:b0:1e:d3:36:2b:2a:b8:6b:
+                    b8:6f:a2:8e:95:56:8e:e3:12:27:39:42:65:a4:a1:
+                    8f:85:66:33:6a:e4:95:5b:ff:95:7a:c8:8a:49:09:
+                    81:58:9e:95:60:0c:61:27:65:c9:d4:65:2f:b2:b2:
+                    4b:81:6f:03:55:b5:37:5c:1e:62:07:a7:75:e2:3d:
+                    4d:aa:37:19:ea:eb:c0:ab:75:a5:9b:e9:04:2e:b4:
+                    ea:e0:79:bf:86:9a:e4:6e:7d:72:3a:40:b8:04:66:
+                    28:dc:5f:7a:1c:41:60:f9:de:9b:b8:dc:6e:24:4f:
+                    40:cf
+                Exponent: 65537 (0x10001)
+        X509v3 extensions:
+            X509v3 Key Usage: critical
+                Digital Signature, Key Encipherment, Certificate Sign
+            X509v3 Basic Constraints: critical
+                CA:TRUE
+            X509v3 Subject Key Identifier: 
+                F3:97:AF:42:C4:6D:FA:A4:15:2D:8C:C3:4F:CF:80:40:6B:6A:7F:26
+    Signature Algorithm: sha256WithRSAEncryption
+         09:c9:48:6a:fe:81:3d:8e:ee:ce:1c:7a:08:47:0a:f0:bb:75:
+         8a:e1:2c:6c:61:db:fa:52:b6:e1:4d:be:a4:c3:ab:79:00:e3:
+         e9:19:21:95:1f:a3:72:d6:17:4d:2a:84:b4:ac:14:bc:11:27:
+         6a:6d:c9:d0:a5:af:c3:ef:ef:98:1c:e0:84:ab:12:b9:57:7f:
+         8d:c2:72:7c:f1:7e:86:36:ce:dc:4e:5e:4f:97:18:da:cc:03:
+         df:5c:8f:3d:ea:3c:e7:ea:76:1a:11:bc:68:2d:66:b5:92:0c:
+         a7:3c:db:0f:be:40:d0:ed:25:25:75:e0:ec:f4:26:4f:79:9a:
+         ba:7f:e1:ee:57:1b:19:6f:00:9f:d5:6f:7f:53:0a:8a:73:bd:
+         8c:c6:78:05:c4:f1:af:2b:58:d3:8d:c1:f2:b6:de:39:c9:47:
+         d8:19:65:19:96:cb:2f:bd:59:85:7c:46:33:36:86:cd:fc:30:
+         c0:32:52:7a:6e:62:c3:40:bf:13:2d:55:bf:40:ce:97:e8:a4:
+         93:9f:59:d3:94:a1:51:f9:b4:b7:16:a6:dc:fb:8b:9d:16:3b:
+         03:2c:cc:fe:f2:4a:d9:0d:20:5c:59:4c:5f:3c:d8:f1:c8:ac:
+         e5:f8:a2:ca:30:d3:6a:5a:0c:6a:86:ff:ec:f6:1b:ea:8b:62:
+         f9:a2:d4:f3
+
+[student@workstation pools-adding-workers]$ cat approve-csrs.sh 
+#!/bin/bash
+
+count=0
+previous=0
+
+while [ ${count} -lt 6 ]; do
+    # Count nodes named "worker" and output if the number has changed
+    count=$(oc get nodes -o name | grep worker | wc -l)
+    if [ ${previous} -ne ${count} ]; then
+        echo "Worker count is ${count}."
+        previous="${count}"
+    fi
+
+    # Approve pending CSRs
+    oc get csr -o json | jq '.items[] | select(.status == {}) | .metadata.name' | xargs -r oc adm certificate approve
+
+    sleep 2
+done
+
+
+

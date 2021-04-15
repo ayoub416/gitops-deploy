@@ -1,0 +1,230 @@
+  100  cd DO380/labs/automation-scripts/
+  101  ls -lt
+  102  cat audit.sh 
+  103  oc login -u admin -p redhat https://api.ocp4.example.com:6443
+  104  ./audit.sh 
+  105  oc new-project automation-scripts
+  106  oc create -f rbac.yml
+  107  ls -lt
+  108  cat rbac.yml 
+  109  vi rbac.yml 
+  110  diff rbac.yml ../../solutions/automation-scripts/rbac.yml 
+  111  vi rbac.yml 
+  112  diff rbac.yml ../../solutions/automation-scripts/rbac.yml 
+  113  oc create -f rbac.yml 
+  114  vi job.yml 
+  115  oc create -f job.yml 
+  116  oc get jobs,pods
+  117  oc logs job.batch/audit-sh
+  118  vi cronjob.yml 
+  119  diff cronjob.yml ../../solutions/automation-scripts/cronjob.yml 
+  120  oc create -f cronjob.yml 
+  121  watch oc get cronjobs,jobs,pods
+  122  cd 
+  123  watch oc get cronjobs,jobs,pods
+  124  oc logs job.batch/audit-cron-1618254600
+  125  lab automation-scripts finish
+  126  oc login -u admin -p redhat https://api.ocp4.example.com:6443
+  127  curl -k --header "Authorization: Bearer jwDAHzmtS81ZVC73DYGZPWiV1tzbl9MnavwE0WKOfSs"  -X GET https://api.example.com/api
+  128  curl -k --header "Authorization: Bearer jwDAHzmtS81ZVC73DYGZPWiV1tzbl9MnavwE0WKOfSs"  -X GET https://api.ocp4.example.com/api
+  129  curl -k --header "Authorization: Bearer jwDAHzmtS81ZVC73DYGZPWiV1tzbl9MnavwE0WKOfSs"  -X GET https://api.ocp4.example.com:6443/api
+  130  oc get route -n openshift-authentication
+  131  oc get route oauth-openshift -n openshift-authentication
+  132  oc get route oauth-openshift -n openshift-authentication -o jsonpath='{.spec.host}'
+  133  OAUTH_HOST=$(oc get route oauth-openshift -n openshift-authentication -o jsonpath='{.spec.host}')
+  134  curl -u admin -kv "https://$OAUTH_HOST/oauth/authorize?client_id=openshift-challenging-client&response_type=token"
+  135  TOKEN=Fz9JbTvyMsNAUKy3ciqx56KTRMcoaU9CKzIYmagcl7k
+  136  HEADER="Authorization: Bearer $TOKEN"
+  137  curl -k --header "$HEADER" -X GET https://api.ocp4.example.com:6443/api
+  138  curl -k --header "$HEADER" -X GET https://api.ocp4.example.com:6443/api/v1
+  139  curl -k --header "$HEADER" -X GET https://api.ocp4.example.com:6443/api/pods
+  140  curl -k --header "$HEADER" -X GET https://api.ocp4.example.com:6443/api/v1/pods
+  141  curl -k --header "$HEADER" -X GET https://api.ocp4.example.com:6443/api/v1/pods | jq ".items[].metadata.name"
+  142  oc explain routes
+  143  curl -k --header "$HEADER" -X GET https://api.ocp4.example.com:6443/api/route.openshift.io/v1
+  144  curl -k --header "$HEADER" -X GET https://api.ocp4.example.com:6443/apis/route.openshift.io/v1
+  145  curl -k --header "$HEADER" -X GET https://api.ocp4.example.com:6443/apis/route.openshift.io/v1/routes | jq '.items[].spec.host'
+  146  lab automation-rest finish
+  147  lab automation-ansible start
+  148  cd DO380/labs/automation-ansible/
+  149  cat hello.yml 
+  150  history 30
+  151  history
+  152  cat hello.yml 
+  153  vi hello.yml 
+  154  vi k8s.yml 
+  155  diff k8s.yml ../../solutions/automation-ansible/k8s.yml 
+  156  oc login -u developer -p developer  https://api.ocp4.example.com:6443
+  157  ansible-playbook k8s.yml -v
+  158  vi k8s.yml 
+  159  ansible-playbook k8s.yml -v
+  160  cat ../../solutions/automation-ansible/k8s.yml 
+  161  ansible-playbook k8s.yml -v
+  162  oc project automation-ansible 
+  163  oc get all
+  164  cd 
+  165  lab automation-ansible finish
+  166  set -o vi
+  167  oc login -u admin -p redhat https://api.ocp4.example.com:6443
+  168  oc get --all-namespaces | grep -i control
+  169  oc get pods
+  170  oc get nodes -q wide
+  171  oc get nodes -0 wide
+  172  oc get nodes -o wide
+  173  oc get packagemanifests
+  174  oc get packagemanifests | grep Hat
+  175  oc describe packagemanifests ocs-operator
+  176  oc get csv -A
+  177  oc get subs -A
+  178  oc describe openshift-operator-lifecycle-manager | grep -i kind
+  179  lab operators-install start
+  180  
+  181  
+  182  .viminfo .
+  183  
+  184  oc login -u admin -p redhat https://api.ocp4.example.com:6443
+  185  vi metering-operator-namespace.yaml
+  186  omation-scripts start
+  187  lab automation-scripts start
+  188  cd DO380/solutions/automation-scripts/
+  189  ls -lt
+  190  cat rbac.yml 
+  191  oc login -u admin -p redhat https://api.ocp4.example.com:6443
+  192  oc get pods
+  193  pwd
+  194  ls -lt
+  195  cat job.yml 
+  196  cat cronjob.yml 
+  197  cd ../..
+  198  ls -lt
+  199  cd ..
+  200  ls -lt
+  201  cat get-users.sh 
+  202  lab automation-scripts finish
+  203  oc get pods --all-namespace
+  204  oc get pods --all-namespaces
+  205  pwd
+  206  ls -la
+  207  ls -lt .kube/config 
+  208  cat .kube/config 
+  209  oc whoami -t
+  210  oc proxy
+  211  vi metering-operator-namespace.yaml
+  212  oc apply -f metering-operator-namespace.yaml 
+  213  oc project openshift-metering 
+  214  vi metering-operator-group.yaml
+  215  set -o vi
+  216  ls -lt
+  217  vi metering-operator-group.yaml
+  218  oc apply -f metering-operator-group.yaml 
+  219  
+  220  
+  221  .viminfo .
+  222  
+  223  oc login -u admin -p redhat https://api.ocp4.example.com:6443
+  224  oc project openshift-metering 
+  225  oc apply -f metering-operator-group.yaml 
+  226  vi metering-operator-group.yaml 
+  227  oc apply -f metering-operator-group.yaml 
+  228  oc apply -f metering-operator-namespace.yaml 
+  229  oc apply -f metering-operator-group.yaml 
+  230  lab operators-install start
+  231  oc apply -f metering-operator-group.yaml 
+  232  lab operators-install finish
+  233  lab operators-install start
+  234  oc login -u admin -p redhat https://api.ocp4.example.com:6443
+  235  oc apply -f metering-operator-namespace.yaml 
+  236  oc project openshift-metering 
+  237  oc apply -f metering-operator-group.yaml 
+  238  cat metering-operator-group.yaml 
+  239  cat metering-operator-namespace.yaml 
+  240  vi metering-operator-group.yaml
+  241  oc apply -f metering-operator-group.yaml
+  242  vi metering-operator-subscription.yaml
+  243  oc apply -f metering-operator-subscription.yaml 
+  244  vi metering-operator-group.yaml
+  245  oc apply -f metering-operator-group.yaml 
+  246  vi metering-operator-group.yaml
+  247  oc apply -f metering-operator-group.yaml 
+  248  set -o vi
+  249  oc login -u admin -p redhat https://api.ocp4.example.com:6443
+  250  oc project openshift-metering 
+  251  oc describe sub ge-openshift-metering 
+  252  lab operators-install finish
+  253  oc get clusteroperators.config.openshift.io 
+  254  oc get clusteroperators
+  255  lab operators-cluster start
+  256  VER=$(oc get clusterversion version -o jsonpath='{.status.desired.image}')
+  259  oc adm release extract --from=$VER --to=release-image
+  260  ls -lt
+  261  ls release-image/*samples*
+  262  less release-image/*samples*06-operator.yaml
+  263  oc get pods -n openshift-cluster-samples-operator
+  264  oc logs pod/cluster-samples-operator-665dfb69bf-lcmtm -n openshift-cluster-samples-operator --all-containers
+  265  oc get events -n openshift-cluster-samples-operator 
+  266  lab operators-cluster finish
+  267  lab operators-review start
+  268  vi DO380/labs/operators-review/metering_operator.yaml 
+  269  oc apply -f DO380/labs/operators-review/metering_operator.yaml
+  270  vi DO380/labs/operators-review/metering_operator.yaml 
+  271  cat metering-operator-*
+  272  vi DO380/labs/operators-review/metering_operator.yaml 
+  273  oc apply -f DO380/labs/operators-review/metering_operator.yaml
+  274  vi DO380/labs/operators-review/metering_operator.yaml 
+  275  oc apply -f DO380/labs/operators-review/metering_operator.yaml
+  276  oc delete openshift-cluster-storage-operator
+  277  oc delete project  openshift-cluster-storage-operator
+  278  watch oc get project openshi-cluster-storage-operator
+  279  watch oc get project openshit-cluster-storage-operator
+  280  watch oc get project openshift-cluster-storage-operator
+  281  lab operators-review grade
+  282  lab operators-review finish
+  283  cat DO380/labs/operators-review/metering_operator.yaml
+  284  lab operators-review start
+  285  vi DO380/labs/operators-review/metering_operator.yaml
+  286  oc apply -f DO380/labs/operators-review/metering_operator.yaml 
+  287  cat DO380/labs/operators-review/metering_operator.yaml
+  288  lab gitops-deploy start
+  289  git clone https://github.com/ayoub416/gitops-deploy.git
+  290  cp ~/DO380/labs/gitops-deploy/hello/* ~/gitops-deploy/
+  291  cd gitops-deploy/
+  292  ls
+  293  less jenkinsfile
+  294  less Jenkinsfile 
+  295  git add *
+  296  git commit -m 'sample app and pipeline'
+  297  git push
+  298  oc login -u developer -p developer  https://api.ocp4.example.com:6443
+  299  oc new-project gitops-deploy
+  300  oc get template -n openshift | grep jenkins
+  301  oc process jenkins-persistent --parameters -n openshift
+  302  oc new-app --template jenkins-persistent
+  303  oc login -u admin -p redhat
+  304  oc adm policy add-cluster-role-to-user self-provisioner -z jenkins -n gitops-deploy 
+  305  oc login -u developer -p developer
+  306  oc project gitops-deploy 
+  307  os get pod
+  308  oc get pod
+  309  oc logs jenkins-1-j594d | grep 'up and running'
+  310  oc get oute
+  311  oc get route
+  312  oc get pod
+  313  oc status
+  314  oc status -n hello-master-1
+  315  oc get pod
+  316  oc get projects.
+  317  oc get project
+  318  vi developer-token.txt
+  319  cd ~/DO380/labs/gitops-deploy/sh/
+  320  cat monitor-build.sh 
+  321  ./monitor-build.sh 
+  322  cd -
+  323  mv developer-token.txt ~/.
+  324  cd -
+  325  ./monitor-build.sh 
+  326  lab gitops-deploy finish 
+  327  history
+
+
+[student@workstation automation-ansible]$
+
